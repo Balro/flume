@@ -36,9 +36,17 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.io.*;
 import java.lang.reflect.Method;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.net.URL;
+import java.net.URLConnection;
 import java.security.PrivilegedExceptionAction;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -364,6 +372,98 @@ class BucketWriter {
     }
   }
 
+    /**
+     * last modified time: 20200813
+     *
+     * @author balro
+     */
+    private synchronized void recoverLease(FileSystem fs, String path) {
+        if (fs instanceof DistributedFileSystem) {
+            DistributedFileSystem dfs = (DistributedFileSystem) fs;
+            try {
+                LOG.info("Starting lease recovery for {} with filesystem {}", path, fs.toString());
+                ((DistributedFileSystem) fs).recoverLease(new Path(path));
+            } catch (IOException ex) {
+                LOG.warn("Lease recovery failed for {} with filesystem {}", path, fs.toString(), ex);
+            }
+        } else {
+            LOG.warn("Lease recovery failed for {} because fs {} is not a DistributedFileSystem", path, fs);
+        }
+    }
+
+    /**
+     * 检查文件是否可以重命名，直到成功。
+     * last modified time: 20200813
+     *
+     * @author balro
+     */
+    private class ScheduledRenameCallableV2 implements Callable<Void> {
+        private final String path = bucketPath;
+        private final String finalPath = targetPath;
+        private FileSystem fs = fileSystem;
+        private int renameTries = 1; // one attempt is already done
+        private int alertCount = 0; // 限制告警最大次数为 maxRetries，避免无限制告警。
+
+        @Override
+        public Void call() throws Exception {
+            // 避免无限制触发钉钉告警，最大告警次数同maxRetries。
+            if (renameTries >= maxRetries && alertCount < maxRetries) {
+                LOG.warn("Unsuccessfully attempted to rename " + path + " " +
+                        maxRetries + " times. File may still be open.");
+                // 重命名文件失败达到最大次数则发送钉钉警报。
+                postDing();
+                alertCount++;
+            }
+            renameTries++;
+            try {
+                renameBucket(path, finalPath, fs);
+                // rename成功时，关闭文件。
+                recoverLease(fs, finalPath);
+            } catch (Exception e) {
+                LOG.warn("Renaming file: " + path + " failed with " + renameTries + " times. Will " +
+                        "retry again in " + retryInterval + " seconds.", e);
+                timedRollerPool.schedule(this, retryInterval, TimeUnit.SECONDS);
+                return null;
+            }
+            return null;
+        }
+    }
+
+    /**
+     * 增加关闭失败钉钉警报。
+     *
+     * @author balro
+     */
+    public void postDing() throws Exception {
+        // 暂时将dingding token固话在代码中。
+        String token = "abc";
+        String urlStr = "https://oapi.dingtalk.com/robot/send?access_token=" + token;
+        URL url = new URL(urlStr);
+        URLConnection conn = url.openConnection();
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        String msg = "{\"msgtype\":\"text\",\"text\":{\"content\":\"" +
+                sdf.format(new Date()) + "\n监控警报:flume关闭文件失败\n待关闭文件" + bucketPath + "\n" +
+                "\"},\"at\":{\"isAtAll\":true}}";
+        PrintWriter pw = new PrintWriter(new OutputStreamWriter(conn.getOutputStream()));
+        pw.println(msg);
+        pw.flush();
+
+        StringBuilder sb = new StringBuilder();
+        BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        String line;
+        while ((line = br.readLine()) != null) {
+            System.out.println(line);
+            sb.append(line);
+        }
+        LOG.info("Alert to dingding " + token + " with msg " + msg + " get result " + sb.toString());
+
+        pw.close();
+        br.close();
+    }
+
   private class ScheduledRenameCallable implements Callable<Void> {
     private final String path = bucketPath;
     private final String finalPath = targetPath;
@@ -462,7 +562,9 @@ class BucketWriter {
         LOG.warn("failed to rename() file (" + bucketPath +
                  "). Exception follows.", e);
         sinkCounter.incrementConnectionFailedCount();
-        final Callable<Void> scheduledRename =  new ScheduledRenameCallable();
+//                final Callable<Void> scheduledRename = new ScheduledRenameCallable();
+                // 改用自定义文件关闭回调。
+                final Callable<Void> scheduledRename = new ScheduledRenameCallableV2();
         timedRollerPool.schedule(scheduledRename, retryInterval, TimeUnit.SECONDS);
       }
     }
