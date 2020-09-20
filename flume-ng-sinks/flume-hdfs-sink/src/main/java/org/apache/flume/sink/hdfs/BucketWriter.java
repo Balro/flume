@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -68,7 +68,7 @@ import java.util.concurrent.atomic.AtomicLong;
 class BucketWriter {
 
   private static final Logger LOG = LoggerFactory
-      .getLogger(BucketWriter.class);
+          .getLogger(BucketWriter.class);
 
   /**
    * This lock ensures that only one thread can open a file at a time.
@@ -119,20 +119,23 @@ class BucketWriter {
   private final long retryInterval;
   private final int maxRetries;
 
+  private final String DING_TOKEN_KEY = "hdfs.ding.token"; // @balro
+  private final String dingToken; // @balro
+
   // flag that the bucket writer was closed due to idling and thus shouldn't be
   // reopened. Not ideal, but avoids internals of owners
   protected AtomicBoolean closed = new AtomicBoolean();
   AtomicInteger renameTries = new AtomicInteger(0);
 
   BucketWriter(long rollInterval, long rollSize, long rollCount, long batchSize,
-      Context context, String filePath, String fileName, String inUsePrefix,
-      String inUseSuffix, String fileSuffix, CompressionCodec codeC,
-      CompressionType compType, HDFSWriter writer,
-      ScheduledExecutorService timedRollerPool, PrivilegedExecutor proxyUser,
-      SinkCounter sinkCounter, int idleTimeout, WriterCallback onCloseCallback,
-      String onCloseCallbackPath, long callTimeout,
-      ExecutorService callTimeoutPool, long retryInterval,
-      int maxRetries) {
+               Context context, String filePath, String fileName, String inUsePrefix,
+               String inUseSuffix, String fileSuffix, CompressionCodec codeC,
+               CompressionType compType, HDFSWriter writer,
+               ScheduledExecutorService timedRollerPool, PrivilegedExecutor proxyUser,
+               SinkCounter sinkCounter, int idleTimeout, WriterCallback onCloseCallback,
+               String onCloseCallbackPath, long callTimeout,
+               ExecutorService callTimeoutPool, long retryInterval,
+               int maxRetries) {
     this(rollInterval, rollSize, rollCount, batchSize,
             context, filePath, fileName, inUsePrefix,
             inUseSuffix, fileSuffix, codeC,
@@ -145,14 +148,14 @@ class BucketWriter {
   }
 
   BucketWriter(long rollInterval, long rollSize, long rollCount, long batchSize,
-           Context context, String filePath, String fileName, String inUsePrefix,
-           String inUseSuffix, String fileSuffix, CompressionCodec codeC,
-           CompressionType compType, HDFSWriter writer,
-           ScheduledExecutorService timedRollerPool, PrivilegedExecutor proxyUser,
-           SinkCounter sinkCounter, int idleTimeout, WriterCallback onCloseCallback,
-           String onCloseCallbackPath, long callTimeout,
-           ExecutorService callTimeoutPool, long retryInterval,
-           int maxRetries, Clock clock) {
+               Context context, String filePath, String fileName, String inUsePrefix,
+               String inUseSuffix, String fileSuffix, CompressionCodec codeC,
+               CompressionType compType, HDFSWriter writer,
+               ScheduledExecutorService timedRollerPool, PrivilegedExecutor proxyUser,
+               SinkCounter sinkCounter, int idleTimeout, WriterCallback onCloseCallback,
+               String onCloseCallbackPath, long callTimeout,
+               ExecutorService callTimeoutPool, long retryInterval,
+               int maxRetries, Clock clock) {
     this.rollInterval = rollInterval;
     this.rollSize = rollSize;
     this.rollCount = rollCount;
@@ -180,6 +183,9 @@ class BucketWriter {
     isOpen = false;
     isUnderReplicated = false;
     this.writer.configure(context);
+
+    this.dingToken = context.getString(DING_TOKEN_KEY); // @balro
+    LOG.info("initialize ding token " + dingToken);
   }
 
   @VisibleForTesting
@@ -200,22 +206,23 @@ class BucketWriter {
   private Method getRefIsClosed() {
     try {
       return fileSystem.getClass().getMethod("isFileClosed",
-        Path.class);
+              Path.class);
     } catch (Exception e) {
       LOG.info("isFileClosed() is not available in the version of the " +
-               "distributed filesystem being used. " +
-               "Flume will not attempt to re-close files if the close fails " +
-               "on the first attempt");
+              "distributed filesystem being used. " +
+              "Flume will not attempt to re-close files if the close fails " +
+              "on the first attempt");
       return null;
     }
   }
 
   private Boolean isFileClosed(FileSystem fs, Path tmpFilePath) throws Exception {
-    return (Boolean)(isClosedMethod.invoke(fs, tmpFilePath));
+    return (Boolean) (isClosedMethod.invoke(fs, tmpFilePath));
   }
 
   /**
    * open() is called by append()
+   *
    * @throws IOException
    * @throws InterruptedException
    */
@@ -248,7 +255,7 @@ class BucketWriter {
         }
 
         bucketPath = filePath + "/" + inUsePrefix
-          + fullFileName + inUseSuffix;
+                + fullFileName + inUseSuffix;
         targetPath = filePath + "/" + fullFileName;
 
         LOG.info("Creating " + bucketPath);
@@ -292,7 +299,7 @@ class BucketWriter {
       Callable<Void> action = new Callable<Void>() {
         public Void call() throws Exception {
           LOG.debug("Rolling file ({}): Roll scheduled after {} sec elapsed.",
-              bucketPath, rollInterval);
+                  bucketPath, rollInterval);
           try {
             // Roll the file and remove reference from sfWriters map.
             close(true);
@@ -303,7 +310,7 @@ class BucketWriter {
         }
       };
       timedRollFuture = timedRollerPool.schedule(action, rollInterval,
-          TimeUnit.SECONDS);
+              TimeUnit.SECONDS);
     }
 
     isOpen = true;
@@ -344,6 +351,7 @@ class BucketWriter {
      * Tries to close the writer. Repeats the close if the maximum number
      * of retries is not reached or an immediate close is not reuqested.
      * If all close attempts were unsuccessful we try to recover the lease.
+     *
      * @param immediate An immediate close is required
      */
     public void close(boolean immediate) {
@@ -354,7 +362,7 @@ class BucketWriter {
         sinkCounter.incrementConnectionClosedCount();
       } catch (InterruptedException | IOException e) {
         LOG.warn("Closing file: " + path + " failed. Will " +
-            "retry again in " + retryInterval + " seconds.", e);
+                "retry again in " + retryInterval + " seconds.", e);
         if (timedRollerPool != null && !timedRollerPool.isTerminated()) {
           if (shouldRetry) {
             timedRollerPool.schedule(this, retryInterval, TimeUnit.SECONDS);
@@ -372,97 +380,95 @@ class BucketWriter {
     }
   }
 
-    /**
-     * last modified time: 20200813
-     *
-     * @author balro
-     */
-    private synchronized void recoverLease(FileSystem fs, String path) {
-        if (fs instanceof DistributedFileSystem) {
-            DistributedFileSystem dfs = (DistributedFileSystem) fs;
-            try {
-                LOG.info("Starting lease recovery for {} with filesystem {}", path, fs.toString());
-                ((DistributedFileSystem) fs).recoverLease(new Path(path));
-            } catch (IOException ex) {
-                LOG.warn("Lease recovery failed for {} with filesystem {}", path, fs.toString(), ex);
-            }
-        } else {
-            LOG.warn("Lease recovery failed for {} because fs {} is not a DistributedFileSystem", path, fs);
-        }
+  /**
+   * last modified time: 20200813
+   *
+   * @author balro
+   */
+  private synchronized void recoverLease(FileSystem fs, String path) {
+    if (fs instanceof DistributedFileSystem) {
+      DistributedFileSystem dfs = (DistributedFileSystem) fs;
+      try {
+        LOG.info("Starting lease recovery for {} with filesystem {}", path, fs.toString());
+        ((DistributedFileSystem) fs).recoverLease(new Path(path));
+      } catch (IOException ex) {
+        LOG.warn("Lease recovery failed for {} with filesystem {}", path, fs.toString(), ex);
+      }
+    } else {
+      LOG.warn("Lease recovery failed for {} because fs {} is not a DistributedFileSystem", path, fs);
     }
+  }
 
-    /**
-     * 检查文件是否可以重命名，直到成功。
-     * last modified time: 20200813
-     *
-     * @author balro
-     */
-    private class ScheduledRenameCallableV2 implements Callable<Void> {
-        private final String path = bucketPath;
-        private final String finalPath = targetPath;
-        private FileSystem fs = fileSystem;
-        private int renameTries = 1; // one attempt is already done
-        private int alertCount = 0; // 限制告警最大次数为 maxRetries，避免无限制告警。
+  /**
+   * 检查文件是否可以重命名，直到成功。
+   * last modified time: 20200813
+   *
+   * @author balro
+   */
+  private class ScheduledRenameCallableV2 implements Callable<Void> {
+    private final String path = bucketPath;
+    private final String finalPath = targetPath;
+    private FileSystem fs = fileSystem;
+    private int renameTries = 1; // one attempt is already done
+    private int alertCount = 0; // 限制告警最大次数为 maxRetries，避免无限制告警。
 
-        @Override
-        public Void call() throws Exception {
-            // 避免无限制触发钉钉告警，最大告警次数同maxRetries。
-            if (renameTries >= maxRetries && alertCount < maxRetries) {
-                LOG.warn("Unsuccessfully attempted to rename " + path + " " +
-                        maxRetries + " times. File may still be open.");
-                // 重命名文件失败达到最大次数则发送钉钉警报。
-                postDing();
-                alertCount++;
-            }
-            renameTries++;
-            try {
-                renameBucket(path, finalPath, fs);
-                // rename成功时，关闭文件。
-                recoverLease(fs, finalPath);
-            } catch (Exception e) {
-                LOG.warn("Renaming file: " + path + " failed with " + renameTries + " times. Will " +
-                        "retry again in " + retryInterval + " seconds.", e);
-                timedRollerPool.schedule(this, retryInterval, TimeUnit.SECONDS);
-                return null;
-            }
-            return null;
-        }
+    @Override
+    public Void call() throws Exception {
+      // 避免无限制触发钉钉告警，最大告警次数同maxRetries。
+      if (renameTries >= maxRetries && alertCount < maxRetries) {
+        LOG.warn("Unsuccessfully attempted to rename " + path + " " +
+                maxRetries + " times. File may still be open.");
+        // 重命名文件失败达到最大次数则发送钉钉警报。
+        postDing();
+        alertCount++;
+      }
+      renameTries++;
+      try {
+        renameBucket(path, finalPath, fs);
+        // rename成功时，关闭文件。
+        recoverLease(fs, finalPath);
+      } catch (Exception e) {
+        LOG.warn("Renaming file: " + path + " failed with " + renameTries + " times. Will " +
+                "retry again in " + retryInterval + " seconds.", e);
+        timedRollerPool.schedule(this, retryInterval, TimeUnit.SECONDS);
+        return null;
+      }
+      return null;
     }
+  }
 
-    /**
-     * 增加关闭失败钉钉警报。
-     *
-     * @author balro
-     */
-    public void postDing() throws Exception {
-        // 暂时将dingding token固话在代码中。
-        String token = "abc";
-        String urlStr = "https://oapi.dingtalk.com/robot/send?access_token=" + token;
-        URL url = new URL(urlStr);
-        URLConnection conn = url.openConnection();
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
+  /**
+   * 增加关闭失败钉钉警报。
+   *
+   * @author balro
+   */
+  public void postDing() throws Exception {
+    String urlStr = "https://oapi.dingtalk.com/robot/send?access_token=" + dingToken;
+    URL url = new URL(urlStr);
+    URLConnection conn = url.openConnection();
+    conn.setDoOutput(true);
+    conn.setRequestProperty("Content-Type", "application/json");
 
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-        String msg = "{\"msgtype\":\"text\",\"text\":{\"content\":\"" +
-                sdf.format(new Date()) + "\n监控警报:flume关闭文件失败\n待关闭文件" + bucketPath + "\n" +
-                "\"},\"at\":{\"isAtAll\":true}}";
-        PrintWriter pw = new PrintWriter(new OutputStreamWriter(conn.getOutputStream()));
-        pw.println(msg);
-        pw.flush();
+    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    String msg = "{\"msgtype\":\"text\",\"text\":{\"content\":\"" +
+            sdf.format(new Date()) + "\n监控警报:flume关闭文件失败\n待关闭文件" + bucketPath + "\n" +
+            "\"},\"at\":{\"isAtAll\":true}}";
+    PrintWriter pw = new PrintWriter(new OutputStreamWriter(conn.getOutputStream()));
+    pw.println(msg);
+    pw.flush();
 
-        StringBuilder sb = new StringBuilder();
-        BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-        String line;
-        while ((line = br.readLine()) != null) {
-            System.out.println(line);
-            sb.append(line);
-        }
-        LOG.info("Alert to dingding " + token + " with msg " + msg + " get result " + sb.toString());
-
-        pw.close();
-        br.close();
+    StringBuilder sb = new StringBuilder();
+    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+    String line;
+    while ((line = br.readLine()) != null) {
+      System.out.println(line);
+      sb.append(line);
     }
+    LOG.info("Alert to dingding " + dingToken + " with msg " + msg + " get result " + sb.toString());
+
+    pw.close();
+    br.close();
+  }
 
   private class ScheduledRenameCallable implements Callable<Void> {
     private final String path = bucketPath;
@@ -482,7 +488,7 @@ class BucketWriter {
         renameBucket(path, finalPath, fs);
       } catch (Exception e) {
         LOG.warn("Renaming file: " + path + " failed. Will " +
-            "retry again in " + retryInterval + " seconds.", e);
+                "retry again in " + retryInterval + " seconds.", e);
         timedRollerPool.schedule(this, retryInterval, TimeUnit.SECONDS);
         return null;
       }
@@ -502,6 +508,8 @@ class BucketWriter {
         ((DistributedFileSystem) fileSystem).recoverLease(new Path(bucketPath));
       } catch (IOException ex) {
         LOG.warn("Lease recovery failed for {}", bucketPath, ex);
+        // @balro 修复当datanode不可用，但是namnenode可用，导致第一次rename成功，之后未关闭targetPath的bug。
+        recoverLease(fileSystem, targetPath);
       }
     }
   }
@@ -515,7 +523,7 @@ class BucketWriter {
    * Safe to call multiple times. Logs HDFSWriter.close() exceptions.
    */
   public void close(boolean callCloseCallback, boolean immediate)
-      throws InterruptedException {
+          throws InterruptedException {
     if (callCloseCallback) {
       if (closed.compareAndSet(false, true)) {
         runCloseAction(); //remove from the cache as soon as possible
@@ -527,7 +535,7 @@ class BucketWriter {
   }
 
   private synchronized void doClose(boolean immediate)
-      throws InterruptedException {
+          throws InterruptedException {
     checkAndThrowInterruptedException();
     try {
       flush();
@@ -560,11 +568,11 @@ class BucketWriter {
         renameBucket(bucketPath, targetPath, fileSystem);
       } catch (Exception e) {
         LOG.warn("failed to rename() file (" + bucketPath +
-                 "). Exception follows.", e);
+                "). Exception follows.", e);
         sinkCounter.incrementConnectionFailedCount();
 //                final Callable<Void> scheduledRename = new ScheduledRenameCallable();
-                // 改用自定义文件关闭回调。
-                final Callable<Void> scheduledRename = new ScheduledRenameCallableV2();
+        // 改用自定义文件关闭回调。
+        final Callable<Void> scheduledRename = new ScheduledRenameCallableV2();
         timedRollerPool.schedule(scheduledRename, retryInterval, TimeUnit.SECONDS);
       }
     }
@@ -572,6 +580,7 @@ class BucketWriter {
 
   /**
    * flush the data
+   *
    * @throws IOException
    * @throws InterruptedException
    */
@@ -587,7 +596,7 @@ class BucketWriter {
           Callable<Void> idleAction = new Callable<Void>() {
             public Void call() throws Exception {
               LOG.info("Closing idle bucketWriter {} at {}", bucketPath,
-                       System.currentTimeMillis());
+                      System.currentTimeMillis());
               if (isOpen) {
                 close(true);
               }
@@ -595,7 +604,7 @@ class BucketWriter {
             }
           };
           idleFuture = timedRollerPool.schedule(idleAction, idleTimeout,
-              TimeUnit.SECONDS);
+                  TimeUnit.SECONDS);
         }
       }
     }
@@ -613,6 +622,7 @@ class BucketWriter {
 
   /**
    * doFlush() must only be called by flush()
+   *
    * @throws IOException
    */
   private void doFlush() throws IOException, InterruptedException {
@@ -655,7 +665,7 @@ class BucketWriter {
           idleFuture.get(callTimeout, TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
           LOG.warn("Timeout while trying to cancel closing of idle file. Idle" +
-                   " file close may have failed", ex);
+                  " file close may have failed", ex);
         } catch (Exception ex) {
           LOG.warn("Error while trying to cancel closing of idle file. ", ex);
         }
@@ -669,7 +679,7 @@ class BucketWriter {
     if (!isOpen) {
       if (closed.get()) {
         throw new BucketClosedException("This bucket writer was closed and " +
-          "this handle is thus no longer valid");
+                "this handle is thus no longer valid");
       }
       open();
     }
@@ -680,12 +690,12 @@ class BucketWriter {
 
       if (isUnderReplicated) {
         if (maxConsecUnderReplRotations > 0 &&
-            consecutiveUnderReplRotateCount >= maxConsecUnderReplRotations) {
+                consecutiveUnderReplRotateCount >= maxConsecUnderReplRotations) {
           doRotate = false;
           if (consecutiveUnderReplRotateCount == maxConsecUnderReplRotations) {
             LOG.error("Hit max consecutive under-replication rotations ({}); " +
-                "will not continue rolling files under this path due to " +
-                "under-replication", maxConsecUnderReplRotations);
+                    "will not continue rolling files under this path due to " +
+                    "under-replication", maxConsecUnderReplRotations);
           }
         } else {
           LOG.warn("Block Under-replication detected. Rotating file.");
@@ -713,8 +723,8 @@ class BucketWriter {
       });
     } catch (IOException e) {
       LOG.warn("Caught IOException writing to HDFSWriter ({}). Closing file (" +
-          bucketPath + ") and rethrowing exception.",
-          e.getMessage());
+                      bucketPath + ") and rethrowing exception.",
+              e.getMessage());
       close(true);
       throw e;
     }
@@ -768,7 +778,7 @@ class BucketWriter {
   // file gets closed later - so an implicit reference to this
   // bucket writer would still be alive in the Callable instance.
   private void renameBucket(String bucketPath, String targetPath, final FileSystem fs)
-      throws IOException, InterruptedException {
+          throws IOException, InterruptedException {
     if (bucketPath.equals(targetPath)) {
       return;
     }
@@ -792,7 +802,7 @@ class BucketWriter {
   @Override
   public String toString() {
     return "[ " + this.getClass().getSimpleName() + " targetPath = " + targetPath +
-        ", bucketPath = " + bucketPath + " ]";
+            ", bucketPath = " + bucketPath + " ]";
   }
 
   private boolean isBatchComplete() {
@@ -802,6 +812,7 @@ class BucketWriter {
   /**
    * This method if the current thread has been interrupted and throws an
    * exception.
+   *
    * @throws InterruptedException
    */
   private static void checkAndThrowInterruptedException()
@@ -819,7 +830,7 @@ class BucketWriter {
    * cancel the callable and throw an IOException
    */
   private <T> T callWithTimeout(final CallRunner<T> callRunner)
-      throws IOException, InterruptedException {
+          throws IOException, InterruptedException {
     Future<T> future = callTimeoutPool.submit(new Callable<T>() {
       @Override
       public T call() throws Exception {
@@ -841,7 +852,7 @@ class BucketWriter {
       future.cancel(true);
       sinkCounter.incrementConnectionFailedCount();
       throw new IOException("Callable timed out after " +
-        callTimeout + " ms" + " on file: " + bucketPath, eT);
+              callTimeout + " ms" + " on file: " + bucketPath, eT);
     } catch (ExecutionException e1) {
       sinkCounter.incrementConnectionFailedCount();
       Throwable cause = e1.getCause();
@@ -852,13 +863,13 @@ class BucketWriter {
       } else if (cause instanceof RuntimeException) {
         throw (RuntimeException) cause;
       } else if (cause instanceof Error) {
-        throw (Error)cause;
+        throw (Error) cause;
       } else {
         throw new RuntimeException(e1);
       }
     } catch (CancellationException ce) {
       throw new InterruptedException(
-        "Blocked callable interrupted by rotation event");
+              "Blocked callable interrupted by rotation event");
     } catch (InterruptedException ex) {
       LOG.warn("Unexpected Exception " + ex.getMessage(), ex);
       throw ex;
@@ -869,6 +880,7 @@ class BucketWriter {
    * Simple interface whose <tt>call</tt> method is called by
    * {#callWithTimeout} in a new thread inside a
    * {@linkplain java.security.PrivilegedExceptionAction#run()} call.
+   *
    * @param <T>
    */
   private interface CallRunner<T> {
